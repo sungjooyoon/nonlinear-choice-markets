@@ -1,0 +1,84 @@
+---
+title: "Nonlinear Probabilities/Weights"
+author: "Sungjoo Yoon"
+date: "2024-07-06"
+output: html_document
+---
+
+## To play with the QJE data, I recommend installing the 'readstata13' package hosted on CRAN.
+## Other packages like 'haven' are notoriously slow.
+## If your computer meets the requirements (64-bit Windows OS, sufficient RAM), I would also suggest manually increasing memory alloc.
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(ggplot2)
+library(knitr)
+library(modelsummary)
+library(readstata13)
+library(tidyverse)
+```
+
+## Reading in the QJE data (running this chunk will reflect why I recommend memory increase)
+## Question for review: how do we feel about N being this big? I assume we could avoid having to process 14.8 million datapoints by picking a niche (e.g. just soccer).
+```{r}
+dataFull <- read.dta13("QJE_data_reconstructed/betfair/Data/dataCombined2.dta")
+categories <- unique(dataFull$sports_id) 
+```
+
+## After we set up a function to process by chunk (vector memory limits), wrangling it in a couple of ways:
+## First, we convert the dates into a more R-readable format (source file was .dta)
+## Second, we mutate to create a new variable 'event_duration'. It calculates the gap between the first bet with a given set of odds and the start of the event
+## Finally, we mutate twice more to find what proportion of the event that a given set of odds was presented at
+```{r}
+process_chunk <- function(data_chunk) {
+  data_chunk <- data_chunk |>
+    mutate(
+      dtactual_off = as.POSIXct(dtactual_off, format="%Y-%m-%d %H:%M:%S"),
+      first_taken = as.POSIXct(first_taken, format="%Y-%m-%d %H:%M:%S"),
+      event_duration = as.numeric(difftime(first_taken, dtactual_off, units = "secs"))
+    ) |>
+    group_by(selection_id) |>
+    mutate(
+      event_total_duration = max(event_duration, na.rm = TRUE),
+      event_proportion = event_duration / event_total_duration
+    ) |>
+    ungroup()
+  return(data_chunk)
+}
+chunk_size <- 10000 
+data_chunks <- split(dataFull, (seq(nrow(dataFull)) - 1) %/% chunk_size)
+processed_chunks <- lapply(data_chunks, process_chunk)
+dataFull_processed <- bind_rows(processed_chunks)
+```
+
+## set.seed() and sampling process allows for a faster initial representation
+```{r}
+set.seed(91125)
+data_sampled <- dataFull_processed |>
+  sample_n(100000)
+
+early_segment <- data_sampled |>
+  filter(event_proportion <= 0.5)
+
+late_segment <- dataFull_processed |>
+  filter(event_proportion > 0.5)
+
+calculate_inflection <- function(data) {
+  data |>
+    group_by(event_proportion) |>
+    summarize(
+      avg_odds = mean(perc, na.rm = TRUE),
+      .groups = 'drop'
+    ) |>
+    mutate(inflection = c(NA, diff(avg_odds)))
+}
+
+early_inflection <- calculate_inflection(early_segment)
+late_inflection <- calculate_inflection(late_segment)
+
+ggplot() +
+  geom_line(data = early_inflection, aes(x = event_proportion, y = inflection), color = 'blue') +
+  geom_line(data = late_inflection, aes(x = event_proportion, y = inflection), color = 'red') +
+  labs(title = "Inflection of v(p) Over Time", x = "Event Proportion", y = "Inflection") +
+  theme_minimal()
+```

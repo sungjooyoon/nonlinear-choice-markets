@@ -110,7 +110,7 @@ code span.wa { color: #5e5e5e; font-style: italic; }
   <!--radix_placeholder_rmarkdown_metadata-->
 
   <script type="text/json" id="radix-rmarkdown-metadata">
-  {"type":"list","attributes":{"names":{"type":"character","attributes":{},"value":["title","author","date","output"]}},"value":[{"type":"character","attributes":{},"value":["Nonlinear Probabilities/Weights"]},{"type":"list","attributes":{},"value":[{"type":"list","attributes":{"names":{"type":"character","attributes":{},"value":["name"]}},"value":[{"type":"character","attributes":{},"value":["Sungjoo Yoon"]}]}]},{"type":"character","attributes":{},"value":["2024-07-06"]},{"type":"list","attributes":{"names":{"type":"character","attributes":{},"value":["distill::distill_article"]}},"value":[{"type":"list","attributes":{"names":{"type":"character","attributes":{},"value":["output_file"]}},"value":[{"type":"character","attributes":{},"value":["index.html"]}]}]}]}
+  {"type":"list","attributes":{"names":{"type":"character","attributes":{},"value":["title","author","date","output"]}},"value":[{"type":"character","attributes":{},"value":["Nonlinear Probabilities/Weights"]},{"type":"list","attributes":{},"value":[{"type":"list","attributes":{"names":{"type":"character","attributes":{},"value":["name"]}},"value":[{"type":"character","attributes":{},"value":["Sungjoo Yoon"]}]}]},{"type":"character","attributes":{},"value":["2024-07-06"]},{"type":"list","attributes":{"names":{"type":"character","attributes":{},"value":["distill::distill_article"]}},"value":[{"type":"NULL"}]}]}
   </script>
   <!--/radix_placeholder_rmarkdown_metadata-->
   
@@ -2366,18 +2366,18 @@ distill-header .nav a {
 If your computer meets the requirements (64-bit Windows OS, sufficient RAM), I would also suggest manually increasing memory alloc.
 While ‘include=FALSE’ is on so this is not visible, I’m using the ‘dplyr’, ‘ggplot2’, ‘knitr’, ‘modelsummary’, ‘readstata13’, and ‘tidyverse’ packages.</p>
 <h1 id="data">Data</h1>
-Reading in the QJE data (running this chunk will reflect why I recommend memory increase)
-Question for review: how do we feel about N being this big? I assume we could avoid having to process 14.8 million datapoints by picking a niche (e.g. just soccer).
+<p>Reading in the QJE data (running this chunk will reflect why I recommend memory increase)
+Question for review: how do we feel about N being this big? I assume we could avoid having to process 14.8 million datapoints by picking a niche (e.g. just soccer).</p>
 <div class="layout-chunk" data-layout="l-body">
 <div class="sourceCode">
 <pre class="sourceCode r"><code class="sourceCode r"><span><span class="va">dataFull</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/pkg/readstata13/man/read.dta13.html">read.dta13</a></span><span class="op">(</span><span class="st">&quot;QJE_data_reconstructed/betfair/Data/dataCombined2.dta&quot;</span><span class="op">)</span></span>
 <span><span class="va">categories</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/unique.html">unique</a></span><span class="op">(</span><span class="va">dataFull</span><span class="op">$</span><span class="va">sports_id</span><span class="op">)</span> </span></code></pre>
 </div>
 </div>
-After we set up a function to process by chunk (vector memory limits), wrangling it in a couple of ways:
+<p>After we set up a function to process by chunk (vector memory limits), wrangling it in a couple of ways:
 First, we convert the dates into a more R-readable format (source file was .dta)
 Second, we mutate to create a new variable ‘event_duration’. It calculates the gap between the first bet with a given set of odds and the start of the event
-Finally, we mutate twice more to find what proportion of the event that a given set of odds was presented at
+Finally, we mutate twice more to find what proportion of the event that a given set of odds was presented at</p>
 <div class="layout-chunk" data-layout="l-body">
 <div class="sourceCode">
 <pre class="sourceCode r"><code class="sourceCode r"><span><span class="va">process_chunk</span> <span class="op">&lt;-</span> <span class="kw">function</span><span class="op">(</span><span class="va">data_chunk</span><span class="op">)</span> <span class="op">{</span></span>
@@ -2401,7 +2401,7 @@ Finally, we mutate twice more to find what proportion of the event that a given 
 <span><span class="va">dataFull_processed</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://dplyr.tidyverse.org/reference/bind_rows.html">bind_rows</a></span><span class="op">(</span><span class="va">processed_chunks</span><span class="op">)</span></span></code></pre>
 </div>
 </div>
-Set.seed() and sampling process allows for a faster initial representation
+<p>Set.seed() and sampling process allows for a faster initial representation</p>
 <div class="layout-chunk" data-layout="l-body">
 <div class="sourceCode">
 <pre class="sourceCode r"><code class="sourceCode r"><span><span class="fu"><a href="https://rdrr.io/r/base/Random.html">set.seed</a></span><span class="op">(</span><span class="fl">91125</span><span class="op">)</span></span>

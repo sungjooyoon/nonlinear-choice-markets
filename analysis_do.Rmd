@@ -1,46 +1,59 @@
 ---
-title: "Nonlinear Probabilities/Weights"
-author: "Sungjoo Yoon"
+title: "Nonlinear Prob. Weighting, draft"
+author: "Sungjoo Yoon — Camerer Group @ Caltech"
 date: "2024-07-06"
-output: html_document
+output:
+  distill::distill_article:
 ---
 
-## To play with the QJE data, I recommend installing the 'readstata13' package hosted on CRAN.
-## Other packages like 'haven' are notoriously slow.
-## If your computer meets the requirements (64-bit Windows OS, sufficient RAM), I would also suggest manually increasing memory alloc.
+# Setup
+To play with the QJE data, I recommend installing the 'readstata13' package hosted on CRAN. Other packages like 'haven' are notoriously slow.
+If your computer meets the requirements (64-bit Windows OS, sufficient RAM), I would also suggest manually increasing memory alloc.
+While 'include=FALSE' is on so this is not visible, I'm using the 'dplyr', 'ggplot2', 'knitr', 'modelsummary', 'nls2', 'purrr', 'readstata13', and 'tidyverse' packages.
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 library(dplyr)
 library(ggplot2)
 library(knitr)
 library(modelsummary)
+library(nls2)
+library(purrr)
 library(readstata13)
 library(tidyverse)
 ```
 
-## Reading in the QJE data (running this chunk will reflect why I recommend memory increase)
-## Question for review: how do we feel about N being this big? I assume we could avoid having to process 14.8 million datapoints by picking a niche (e.g. just soccer).
+# Data
+
+Running this next chunk will reflect why I recommend memory increases.
+
 ```{r}
+# Reading in the data (takes an unholy amount of system memory)
 dataFull <- read.dta13("QJE_data_reconstructed/betfair/Data/dataCombined2.dta")
-categories <- unique(dataFull$sports_id) 
 ```
 
-## After we set up a function to process by chunk (vector memory limits), wrangling it in a couple of ways:
-## First, we convert the dates into a more R-readable format (source file was .dta)
-## Second, we mutate to create a new variable 'event_duration'. It calculates the gap between the first bet with a given set of odds and the start of the event
-## Finally, we mutate twice more to find what proportion of the event that a given set of odds was presented at
 ```{r}
+# Reformatting and filtering to our downsample
+dataFull <- dataFull |>
+  filter(sports_id == "Basketball") |>
+  mutate(
+    dtactual_off = as.POSIXct(dtactual_off, format="%Y-%m-%d %H:%M:%S"),
+    first_taken = as.POSIXct(first_taken, format="%Y-%m-%d %H:%M:%S")
+  )
+
+# Seed for repro — shoutout Pasadena
+set.seed(91125)
+dataFull <- dataFull |>
+  sample_n(100000)
+
+# Function to process data chunks and mutate timestamps
 process_chunk <- function(data_chunk) {
   data_chunk <- data_chunk |>
     mutate(
-      dtactual_off = as.POSIXct(dtactual_off, format="%Y-%m-%d %H:%M:%S"),
-      first_taken = as.POSIXct(first_taken, format="%Y-%m-%d %H:%M:%S"),
       event_duration = as.numeric(difftime(first_taken, dtactual_off, units = "secs"))
     ) |>
-    group_by(selection_id) |>
+    group_by(event_id) |>
     mutate(
-      event_total_duration = max(event_duration, na.rm = TRUE),
-      event_proportion = event_duration / event_total_duration
+      event_total_duration = max(event_duration, na.rm = TRUE)
     ) |>
     ungroup()
   return(data_chunk)
@@ -51,34 +64,107 @@ processed_chunks <- lapply(data_chunks, process_chunk)
 dataFull_processed <- bind_rows(processed_chunks)
 ```
 
-## set.seed() and sampling process allows for a faster initial representation
+Note: pre-game odds are not available in this dataset, exclusively in-play. So instead, I took the earliest in-play bet available. Please let me know if you want me to change the approach. Otherwise, the following code also allows us to segment the last fifteen minutes of the event.
+
 ```{r}
-set.seed(91125)
-data_sampled <- dataFull_processed |>
-  sample_n(100000)
+# Calculating the earliest in-play bet available, which also serves as first implied odds
+earliest_bets <- dataFull_processed |>
+  group_by(event_id) |>
+  filter(first_taken == min(first_taken)) |>
+  select(event_id, first_implied = perc) |>
+  ungroup()
 
-early_segment <- data_sampled |>
-  filter(event_proportion <= 0.5)
+# Merge this information back into the main dataframe
+dataFull_processed <- dataFull_processed |>
+  left_join(earliest_bets, by = "event_id")
 
-late_segment <- dataFull_processed |>
-  filter(event_proportion > 0.5)
+# Define the late segment intervals and create time_interval variable
+dataFull_processed <- dataFull_processed |>
+  filter(event_duration >= (event_total_duration - 15*60)) |>
+  mutate(
+    time_interval = case_when(
+      event_duration >= (event_total_duration - 15*60) & event_duration < (event_total_duration - 12*60) ~ "last_15_to_12",
+      event_duration >= (event_total_duration - 12*60) & event_duration < (event_total_duration - 9*60) ~ "last_12_to_9",
+      event_duration >= (event_total_duration - 9*60) & event_duration < (event_total_duration - 6*60) ~ "last_9_to_6",
+      event_duration >= (event_total_duration - 6*60) & event_duration < (event_total_duration - 3*60) ~ "last_6_to_3",
+      event_duration >= (event_total_duration - 3*60) ~ "last_3_to_0"
+    )
+  )
 
-calculate_inflection <- function(data) {
-  data |>
-    group_by(event_proportion) |>
-    summarize(
-      avg_odds = mean(perc, na.rm = TRUE),
-      .groups = 'drop'
-    ) |>
-    mutate(inflection = c(NA, diff(avg_odds)))
+```
+
+# Analysis
+
+Prelec function and fitting
+
+```{r}
+# Prelec function
+prelec_w <- function(q, gamma, delta) {
+  exp(-delta * (-log(q))^gamma)
 }
 
-early_inflection <- calculate_inflection(early_segment)
-late_inflection <- calculate_inflection(late_segment)
+# Fitting Prelec function
+fit_prelec <- function(data) {
+  nls(actual_prob ~ prelec_w(implied_prob, gamma, delta), data = data,
+      start = list(gamma = 1, delta = 1), algorithm = "port")
+}
 
-ggplot() +
-  geom_line(data = early_inflection, aes(x = event_proportion, y = inflection), color = 'blue') +
-  geom_line(data = late_inflection, aes(x = event_proportion, y = inflection), color = 'red') +
-  labs(title = "Inflection of v(p) Over Time", x = "Event Proportion", y = "Inflection") +
+# Intervals as defined earlier in a structure
+intervals <- c("first_implied", "last_15_to_12", "last_12_to_9", "last_9_to_6", "last_6_to_3", "last_3_to_0")
+
+# Prepare data for fitting
+fit_results <- list()
+
+# Fit Prelec function for each interval
+for (interval in intervals) {
+  if (interval == "first_implied") {
+    subset_data <- dataFull_processed |>
+      group_by(event_id) |>
+      filter(first_taken == min(first_taken)) |>
+      mutate(implied_prob = perc, actual_prob = win_flag)
+  } else {
+    subset_data <- dataFull_processed |>
+      filter(time_interval == interval) |>
+      mutate(implied_prob = perc, actual_prob = win_flag)
+  }
+  prelec_fit <- fit_prelec(subset_data)
+  gamma <- coef(prelec_fit)["gamma"]
+  delta <- coef(prelec_fit)["delta"]
+  fit_results[[interval]] <- list(interval = interval, gamma = gamma, delta = delta, fit = prelec_fit, data = subset_data)
+}
+
+# Extract fitted parameters for each interval and compile into a data frame
+fit_parameters <- map_dfr(fit_results, function(res) {
+  data.frame(
+    interval = res$interval,
+    gamma = res$gamma,
+    delta = res$delta,
+    observations = nrow(res$data),
+    clusters = n_distinct(res$data$event_id),
+    p_value = summary(res$fit)$coefficients["gamma", "Pr(>|t|)"]
+  )
+})
+
+# Print the fitted parameters table
+fit_parameters |>
+  kable(col.names = c("Interval", "Gamma (Curvature)", "Delta (Elevation)", 
+                      "Observations", "Clusters", "p-value (H0: Gamma = 1)"))
+```
+
+```{r}
+# Generate the plot for gamma parameter over time
+ggplot(fit_parameters, aes(x = interval, y = gamma)) +
+  geom_line() +
+  geom_point() +
+  labs(title = "Gamma Parameter Over Time",
+       x = "Time Interval",
+       y = "Gamma") +
   theme_minimal()
+```
+
+Easy way to see the data at every step without bricking your computer, just run this chunk
+
+```{r}
+first_10000_rows <- head(dataFull_processed, 10000)
+view(first_10000_rows)
 ```

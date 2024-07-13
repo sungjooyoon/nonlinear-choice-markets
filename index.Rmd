@@ -153,7 +153,8 @@ fit_parameters |>
 ```
 
 ```{r}
-# Generate the plot for gamma parameter over time
+# Gamma paramerer over time
+fit_parameters$interval <- factor(fit_parameters$interval, levels = c("first_implied", "last_15_to_12", "last_12_to_9", "last_9_to_6", "last_6_to_3", "last_3_to_0"))
 ggplot(fit_parameters, aes(x = interval, y = gamma)) +
   geom_line() +
   geom_point() +
@@ -161,6 +162,7 @@ ggplot(fit_parameters, aes(x = interval, y = gamma)) +
        x = "Time Interval",
        y = "Gamma") +
   theme_minimal()
+
 ```
 
 Easy way to see the data at every step without bricking your computer, just run this chunk

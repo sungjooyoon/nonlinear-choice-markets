@@ -12,6 +12,17 @@ If your computer meets the requirements (64-bit Windows OS, sufficient RAM), I w
 While 'include=FALSE' is on so this is not visible, I'm using the 'dplyr', 'ggplot2', 'knitr', 'markdown', 'modelsummary', 'nls2', 'purrr', 'readstata13', and 'tidyverse' packages.
 
 
+# Notes
+
+- Goal is to see how choice and risk changes as priors stack up towards end of timed market
+- Prelec one parameter: $$ w(p) = \exp(-(-\ln(p))^\alpha) $$
+- Prelec two parameter: $$ w(p) = \exp(-\beta(-\ln(p))^\alpha) $$
+- High-level if we define these functions in code and run NLS to fit data, we can see behavior of gamma curvature (actual vs. implied probs)
+- Gamma curvature reflects risk attitude / how much weighting function distorts perceived vs. objective
+- Prof. Camerer: if gamma is just >1, S-shaped where pi(p)<p. 
+- This is opposite of the typical pattern where pi(p)>p for p<1/e and pi(p)<p for p>1/e
+- "In Prelec one parameter form pi(1/e)=1/e is identity point around which pi(p) rotates"
+
 # Data
 
 Running this next chunk will reflect why I recommend memory increases.
@@ -98,26 +109,63 @@ dataFull_processed <- dataFull_processed |>
 
 Prelec function and fitting
 
+Draft 1 Not sure if this is right
 
 ```r
-# Prelec function
-prelec_w <- function(q, gamma, delta) {
+# Function for calibration curve
+calculate_calibration_curve <- function(data, bins = 10) {
+  data <- data |>
+    mutate(bin = cut(implied_prob, breaks = bins, labels = FALSE)) |>
+    group_by(bin) |>
+    summarize(
+      mean_pred_prob = mean(implied_prob),
+      mean_actual_prob = mean(actual_prob)
+    )
+  return(data)
+}
+
+# Prelec 1 parameter function
+prelec_w_one_param <- function(q, gamma) {
+  exp(-(-log(q))^gamma)
+}
+
+# Prelec 2 parameter function
+prelec_w_two_param <- function(q, gamma, delta) {
   exp(-delta * (-log(q))^gamma)
 }
 
-# Fitting Prelec function
-fit_prelec <- function(data) {
-  nls(actual_prob ~ prelec_w(implied_prob, gamma, delta), data = data,
+# Fitting Prelec 1 parameter function to calibration curve
+fit_prelec_one_param_calibration <- function(data) {
+  nls(mean_actual_prob ~ prelec_w_one_param(mean_pred_prob, gamma), data = data,
+      start = list(gamma = 1), algorithm = "port")
+}
+
+# Fitting Prelec 2 parameter function to calibration curve
+fit_prelec_two_param_calibration <- function(data) {
+  nls(mean_actual_prob ~ prelec_w_two_param(mean_pred_prob, gamma, delta), data = data,
       start = list(gamma = 1, delta = 1), algorithm = "port")
+}
+
+# Function to calculate calibration curves
+calculate_calibration_curve <- function(data, bins = 10) {
+  data <- data |>
+    mutate(bin = cut(implied_prob, breaks = bins, labels = FALSE)) |>
+    group_by(bin) |>
+    summarize(
+      mean_pred_prob = mean(implied_prob),
+      mean_actual_prob = mean(actual_prob)
+    )
+  return(data)
 }
 
 # Intervals as defined earlier in a structure
 intervals <- c("first_implied", "last_15_to_12", "last_12_to_9", "last_9_to_6", "last_6_to_3", "last_3_to_0")
 
-# Prepare data for fitting
-fit_results <- list()
+# Prepare data for fitting with calibration curves
+fit_results_one_param_calibration <- list()
+fit_results_two_param_calibration <- list()
 
-# Fit Prelec function for each interval
+# Fit Prelec function for each interval (including first implied) w/ cal.
 for (interval in intervals) {
   if (interval == "first_implied") {
     subset_data <- dataFull_processed |>
@@ -129,14 +177,306 @@ for (interval in intervals) {
       filter(time_interval == interval) |>
       mutate(implied_prob = perc, actual_prob = win_flag)
   }
-  prelec_fit <- fit_prelec(subset_data)
-  gamma <- coef(prelec_fit)["gamma"]
-  delta <- coef(prelec_fit)["delta"]
-  fit_results[[interval]] <- list(interval = interval, gamma = gamma, delta = delta, fit = prelec_fit, data = subset_data)
+
+  # Calculate calibration curve
+  calibration_data <- calculate_calibration_curve(subset_data)
+
+  # Fit Prelec one-parameter model to calibration curve
+  prelec_fit_one_param_calibration <- fit_prelec_one_param_calibration(calibration_data)
+  gamma_one_param_calibration <- coef(prelec_fit_one_param_calibration)["gamma"]
+  fit_results_one_param_calibration[[interval]] <- list(interval = interval, gamma = gamma_one_param_calibration, fit = prelec_fit_one_param_calibration, data = calibration_data)
+
+  # Fit Prelec two-parameter model to calibration curve
+  prelec_fit_two_param_calibration <- fit_prelec_two_param_calibration(calibration_data)
+  gamma_two_param_calibration <- coef(prelec_fit_two_param_calibration)["gamma"]
+  delta_two_param_calibration <- coef(prelec_fit_two_param_calibration)["delta"]
+  fit_results_two_param_calibration[[interval]] <- list(interval = interval, gamma = gamma_two_param_calibration, delta = delta_two_param_calibration, fit = prelec_fit_two_param_calibration, data = calibration_data)
 }
 
-# Extract fitted parameters for each interval and compile into a data frame
-fit_parameters <- map_dfr(fit_results, function(res) {
+# Fitted parameters to new df structure for 1p model using calibration curves
+fit_parameters_one_param_calibration <- map_dfr(fit_results_one_param_calibration, function(res) {
+  data.frame(
+    interval = res$interval,
+    gamma = res$gamma,
+    observations = nrow(res$data),
+    clusters = n_distinct(res$data$event_id),
+    p_value = summary(res$fit)$coefficients["gamma", "Pr(>|t|)"]
+  )
+})
+```
+
+```
+## Warning: Unknown or uninitialised column: `event_id`.
+## Unknown or uninitialised column: `event_id`.
+## Unknown or uninitialised column: `event_id`.
+## Unknown or uninitialised column: `event_id`.
+## Unknown or uninitialised column: `event_id`.
+## Unknown or uninitialised column: `event_id`.
+```
+
+```r
+# Fitted parameters to new df structure for 2p model using calibration curves
+fit_parameters_two_param_calibration <- map_dfr(fit_results_two_param_calibration, function(res) {
+  data.frame(
+    interval = res$interval,
+    gamma = res$gamma,
+    delta = res$delta,
+    observations = nrow(res$data),
+    clusters = n_distinct(res$data$event_id),
+    p_value = summary(res$fit)$coefficients["gamma", "Pr(>|t|)"]
+  )
+})
+```
+
+```
+## Warning: Unknown or uninitialised column: `event_id`.
+## Unknown or uninitialised column: `event_id`.
+## Unknown or uninitialised column: `event_id`.
+## Unknown or uninitialised column: `event_id`.
+## Unknown or uninitialised column: `event_id`.
+## Unknown or uninitialised column: `event_id`.
+```
+
+```r
+# Tables
+fit_parameters_one_param_calibration |>
+  kable(col.names = c("Interval", "Gamma (Curvature)", "Observations", "Clusters", "p-value (H0: Gamma = 1)"))
+```
+
+<table>
+ <thead>
+  <tr>
+   <th style="text-align:left;">   </th>
+   <th style="text-align:left;"> Interval </th>
+   <th style="text-align:right;"> Gamma (Curvature) </th>
+   <th style="text-align:right;"> Observations </th>
+   <th style="text-align:right;"> Clusters </th>
+   <th style="text-align:right;"> p-value (H0: Gamma = 1) </th>
+  </tr>
+ </thead>
+<tbody>
+  <tr>
+   <td style="text-align:left;"> gamma...1 </td>
+   <td style="text-align:left;"> first_implied </td>
+   <td style="text-align:right;"> 1.5876639 </td>
+   <td style="text-align:right;"> 7 </td>
+   <td style="text-align:right;"> 0 </td>
+   <td style="text-align:right;"> 0.0084363 </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> gamma...2 </td>
+   <td style="text-align:left;"> last_15_to_12 </td>
+   <td style="text-align:right;"> 0.9601368 </td>
+   <td style="text-align:right;"> 10 </td>
+   <td style="text-align:right;"> 0 </td>
+   <td style="text-align:right;"> 0.0000564 </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> gamma...3 </td>
+   <td style="text-align:left;"> last_12_to_9 </td>
+   <td style="text-align:right;"> 0.8087471 </td>
+   <td style="text-align:right;"> 10 </td>
+   <td style="text-align:right;"> 0 </td>
+   <td style="text-align:right;"> 0.0001752 </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> gamma...4 </td>
+   <td style="text-align:left;"> last_9_to_6 </td>
+   <td style="text-align:right;"> 1.1587038 </td>
+   <td style="text-align:right;"> 10 </td>
+   <td style="text-align:right;"> 0 </td>
+   <td style="text-align:right;"> 0.0000041 </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> gamma...5 </td>
+   <td style="text-align:left;"> last_6_to_3 </td>
+   <td style="text-align:right;"> 1.2266805 </td>
+   <td style="text-align:right;"> 10 </td>
+   <td style="text-align:right;"> 0 </td>
+   <td style="text-align:right;"> 0.0000002 </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> gamma...6 </td>
+   <td style="text-align:left;"> last_3_to_0 </td>
+   <td style="text-align:right;"> 1.0558439 </td>
+   <td style="text-align:right;"> 10 </td>
+   <td style="text-align:right;"> 0 </td>
+   <td style="text-align:right;"> 0.0000000 </td>
+  </tr>
+</tbody>
+</table>
+
+```r
+fit_parameters_two_param_calibration |>
+  kable(col.names = c("Interval", "Gamma (Curvature)", "Delta (Elevation)", "Observations", "Clusters", "p-value (H0: Gamma = 1)"))
+```
+
+<table>
+ <thead>
+  <tr>
+   <th style="text-align:left;">   </th>
+   <th style="text-align:left;"> Interval </th>
+   <th style="text-align:right;"> Gamma (Curvature) </th>
+   <th style="text-align:right;"> Delta (Elevation) </th>
+   <th style="text-align:right;"> Observations </th>
+   <th style="text-align:right;"> Clusters </th>
+   <th style="text-align:right;"> p-value (H0: Gamma = 1) </th>
+  </tr>
+ </thead>
+<tbody>
+  <tr>
+   <td style="text-align:left;"> gamma...1 </td>
+   <td style="text-align:left;"> first_implied </td>
+   <td style="text-align:right;"> 1.5862352 </td>
+   <td style="text-align:right;"> 0.9988483 </td>
+   <td style="text-align:right;"> 7 </td>
+   <td style="text-align:right;"> 0 </td>
+   <td style="text-align:right;"> 0.2179916 </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> gamma...2 </td>
+   <td style="text-align:left;"> last_15_to_12 </td>
+   <td style="text-align:right;"> 0.9142696 </td>
+   <td style="text-align:right;"> 0.8743932 </td>
+   <td style="text-align:right;"> 10 </td>
+   <td style="text-align:right;"> 0 </td>
+   <td style="text-align:right;"> 0.0000871 </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> gamma...3 </td>
+   <td style="text-align:left;"> last_12_to_9 </td>
+   <td style="text-align:right;"> 0.7076741 </td>
+   <td style="text-align:right;"> 0.7772526 </td>
+   <td style="text-align:right;"> 10 </td>
+   <td style="text-align:right;"> 0 </td>
+   <td style="text-align:right;"> 0.0000133 </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> gamma...4 </td>
+   <td style="text-align:left;"> last_9_to_6 </td>
+   <td style="text-align:right;"> 1.1023219 </td>
+   <td style="text-align:right;"> 0.9026284 </td>
+   <td style="text-align:right;"> 10 </td>
+   <td style="text-align:right;"> 0 </td>
+   <td style="text-align:right;"> 0.0000073 </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> gamma...5 </td>
+   <td style="text-align:left;"> last_6_to_3 </td>
+   <td style="text-align:right;"> 1.1805037 </td>
+   <td style="text-align:right;"> 0.9196380 </td>
+   <td style="text-align:right;"> 10 </td>
+   <td style="text-align:right;"> 0 </td>
+   <td style="text-align:right;"> 0.0000003 </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> gamma...6 </td>
+   <td style="text-align:left;"> last_3_to_0 </td>
+   <td style="text-align:right;"> 1.1026350 </td>
+   <td style="text-align:right;"> 1.0938470 </td>
+   <td style="text-align:right;"> 10 </td>
+   <td style="text-align:right;"> 0 </td>
+   <td style="text-align:right;"> 0.0000000 </td>
+  </tr>
+</tbody>
+</table>
+
+```r
+# Visualization for gamma parameter in two-parameter model
+fit_parameters_one_param_calibration$interval <- factor(fit_parameters_one_param_calibration$interval, levels = intervals)
+fit_parameters_two_param_calibration$interval <- factor(fit_parameters_two_param_calibration$interval, levels = intervals)
+
+ggplot(fit_parameters_one_param_calibration, aes(x = interval, y = gamma)) +
+  geom_line(group = 1) +
+  geom_point() +
+  labs(title = "Gamma Parameter for One-Parameter Model",
+       x = "Interval",
+       y = "Gamma (Curvature)")
+```
+
+![plot of chunk unnamed-chunk-5](figure/unnamed-chunk-5-1.png)
+
+```r
+ggplot(fit_parameters_two_param_calibration, aes(x = interval, y = gamma)) +
+  geom_line(group = 1) +
+  geom_point() +
+  labs(title = "Gamma Parameter for Two-Parameter Model",
+       x = "Interval",
+       y = "Gamma (Curvature)")
+```
+
+![plot of chunk unnamed-chunk-5](figure/unnamed-chunk-5-2.png)
+
+Draft 0.5: just using regression to fit the data
+
+```r
+# Prelec 1 parameter function
+prelec_w_one_param <- function(q, gamma) {
+  exp(-(-log(q))^gamma)
+}
+
+# Fitting Prelec 1 parameter function
+fit_prelec_one_param <- function(data) {
+  nls(actual_prob ~ prelec_w_one_param(implied_prob, gamma), data = data,
+      start = list(gamma = 1), algorithm = "port")
+}
+
+# Prelec 2
+prelec_w_two_param <- function(q, gamma, delta) {
+  exp(-delta * (-log(q))^gamma)
+}
+
+# Fitting Prelec 2 parameter function
+fit_prelec_two_param <- function(data) {
+  nls(actual_prob ~ prelec_w_two_param(implied_prob, gamma, delta), data = data,
+      start = list(gamma = 1, delta = 1), algorithm = "port")
+}
+
+# Intervals as defined earlier in a structure
+intervals <- c("first_implied", "last_15_to_12", "last_12_to_9", "last_9_to_6", "last_6_to_3", "last_3_to_0")
+
+# Prepare data for fitting
+fit_results_one_param <- list()
+fit_results_two_param <- list()
+
+# Fit Prelec function for each interval (including first implied)
+for (interval in intervals) {
+  if (interval == "first_implied") {
+    subset_data <- dataFull_processed |>
+      group_by(event_id) |>
+      filter(first_taken == min(first_taken)) |>
+      mutate(implied_prob = perc, actual_prob = win_flag)
+  } else {
+    subset_data <- dataFull_processed |>
+      filter(time_interval == interval) |>
+      mutate(implied_prob = perc, actual_prob = win_flag)
+  }
+
+  # Fit Prelec one-parameter model
+  prelec_fit_one_param <- fit_prelec_one_param(subset_data)
+  gamma_one_param <- coef(prelec_fit_one_param)["gamma"]
+  fit_results_one_param[[interval]] <- list(interval = interval, gamma = gamma_one_param, fit = prelec_fit_one_param, data = subset_data)
+
+  # Fit Prelec two-parameter model
+  prelec_fit_two_param <- fit_prelec_two_param(subset_data)
+  gamma_two_param <- coef(prelec_fit_two_param)["gamma"]
+  delta_two_param <- coef(prelec_fit_two_param)["delta"]
+  fit_results_two_param[[interval]] <- list(interval = interval, gamma = gamma_two_param, delta = delta_two_param, fit = prelec_fit_two_param, data = subset_data)
+}
+
+# Fitted parameters to new df structure for one-parameter model
+fit_parameters_one_param <- map_dfr(fit_results_one_param, function(res) {
+  data.frame(
+    interval = res$interval,
+    gamma = res$gamma,
+    observations = nrow(res$data),
+    clusters = n_distinct(res$data$event_id),
+    p_value = summary(res$fit)$coefficients["gamma", "Pr(>|t|)"]
+  )
+})
+
+# Fitted parameters to new df structure for two-parameter model
+fit_parameters_two_param <- map_dfr(fit_results_two_param, function(res) {
   data.frame(
     interval = res$interval,
     gamma = res$gamma,
@@ -147,10 +487,77 @@ fit_parameters <- map_dfr(fit_results, function(res) {
   )
 })
 
-# Print the fitted parameters table
-fit_parameters |>
-  kable(col.names = c("Interval", "Gamma (Curvature)", "Delta (Elevation)", 
-                      "Observations", "Clusters", "p-value (H0: Gamma = 1)"))
+# Tables
+fit_parameters_one_param |>
+  kable(col.names = c("Interval", "Gamma (Curvature)", "Observations", "Clusters", "p-value (H0: Gamma = 1)"))
+```
+
+<table>
+ <thead>
+  <tr>
+   <th style="text-align:left;">   </th>
+   <th style="text-align:left;"> Interval </th>
+   <th style="text-align:right;"> Gamma (Curvature) </th>
+   <th style="text-align:right;"> Observations </th>
+   <th style="text-align:right;"> Clusters </th>
+   <th style="text-align:right;"> p-value (H0: Gamma = 1) </th>
+  </tr>
+ </thead>
+<tbody>
+  <tr>
+   <td style="text-align:left;"> gamma...1 </td>
+   <td style="text-align:left;"> first_implied </td>
+   <td style="text-align:right;"> 0.9883489 </td>
+   <td style="text-align:right;"> 34991 </td>
+   <td style="text-align:right;"> 33612 </td>
+   <td style="text-align:right;"> 0 </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> gamma...2 </td>
+   <td style="text-align:left;"> last_15_to_12 </td>
+   <td style="text-align:right;"> 0.9707036 </td>
+   <td style="text-align:right;"> 683 </td>
+   <td style="text-align:right;"> 649 </td>
+   <td style="text-align:right;"> 0 </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> gamma...3 </td>
+   <td style="text-align:left;"> last_12_to_9 </td>
+   <td style="text-align:right;"> 0.9544373 </td>
+   <td style="text-align:right;"> 774 </td>
+   <td style="text-align:right;"> 732 </td>
+   <td style="text-align:right;"> 0 </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> gamma...4 </td>
+   <td style="text-align:left;"> last_9_to_6 </td>
+   <td style="text-align:right;"> 1.2542790 </td>
+   <td style="text-align:right;"> 871 </td>
+   <td style="text-align:right;"> 823 </td>
+   <td style="text-align:right;"> 0 </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> gamma...5 </td>
+   <td style="text-align:left;"> last_6_to_3 </td>
+   <td style="text-align:right;"> 1.2874838 </td>
+   <td style="text-align:right;"> 1050 </td>
+   <td style="text-align:right;"> 980 </td>
+   <td style="text-align:right;"> 0 </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> gamma...6 </td>
+   <td style="text-align:left;"> last_3_to_0 </td>
+   <td style="text-align:right;"> 1.0487914 </td>
+   <td style="text-align:right;"> 86092 </td>
+   <td style="text-align:right;"> 33612 </td>
+   <td style="text-align:right;"> 0 </td>
+  </tr>
+</tbody>
+</table>
+
+```r
+fit_parameters_two_param |>
+  kable(col.names = c("Interval", "Gamma (Curvature)", "Delta (Elevation)", "Observations", "Clusters", "p-value (H0: Gamma = 1)"))
 ```
 
 <table>
@@ -223,25 +630,53 @@ fit_parameters |>
 </tbody>
 </table>
 
+Viz 0.5
+
 
 ```r
-# Gamma paramerer over time
-fit_parameters$interval <- factor(fit_parameters$interval, levels = c("first_implied", "last_15_to_12", "last_12_to_9", "last_9_to_6", "last_6_to_3", "last_3_to_0"))
-ggplot(fit_parameters, aes(x = interval, y = gamma)) +
-  geom_line() +
-  geom_point() +
-  labs(title = "Gamma Parameter Over Time",
-       x = "Time Interval",
-       y = "Gamma") +
-  theme_minimal()
-```
+fit_parameters_one_param$interval <- factor(fit_parameters_one_param$interval, levels = intervals)
+fit_parameters_two_param$interval <- factor(fit_parameters_two_param$interval, levels = intervals)
 
-```
-## `geom_line()`: Each group consists of only one observation.
-## ℹ Do you need to adjust the group aesthetic?
+plot_one_param <- ggplot(fit_parameters_one_param, aes(x = interval, y = gamma)) +
+  geom_point(size = 3) +
+  geom_line(group = 1) +
+  labs(title = "Prelec One-Parameter Model: Gamma Across Intervals",
+       x = "Interval",
+       y = "Gamma (Curvature)")
+
+# Plot for two-parameter model
+plot_two_param <- ggplot(fit_parameters_two_param, aes(x = interval, y = gamma)) +
+  geom_point(size = 3) +
+  geom_line(group = 1) +
+  labs(title = "Prelec Two-Parameter Model: Gamma Across Intervals",
+       x = "Interval",
+       y = "Gamma (Curvature)")
+
+plot_one_param
 ```
 
 ![plot of chunk unnamed-chunk-7](figure/unnamed-chunk-7-1.png)
+
+```r
+plot_two_param
+```
+
+![plot of chunk unnamed-chunk-7](figure/unnamed-chunk-7-2.png)
+
+```r
+# Viz on number of bets / sizes of trade
+ggplot(dataFull_processed, aes(x = number_bets)) +
+  geom_histogram(binwidth = 0.5, fill = "blue", color = "black", alpha = 0.7) +
+  labs(title = "Distribution of Number of Bets",
+       x = "Number of Bets",
+       y = "Frequency")
+```
+
+```
+## Warning: Removed 2595 rows containing non-finite values (`stat_bin()`).
+```
+
+![plot of chunk unnamed-chunk-7](figure/unnamed-chunk-7-3.png)
 
 Easy way to see the data at every step without bricking your computer, just run this chunk
 

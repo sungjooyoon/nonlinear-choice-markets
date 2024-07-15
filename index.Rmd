@@ -222,16 +222,16 @@ fit_parameters_one_param_calibration |>
 fit_parameters_two_param_calibration |>
   kable(col.names = c("Interval", "Gamma (Curvature)", "Delta (Elevation)", "Observations", "Clusters", "p-value (H0: Gamma = 1)"))
 
+# Visualization for gamma parameter in two-parameter model
+fit_parameters_one_param_calibration$interval <- factor(fit_parameters_one_param_calibration$interval, levels = intervals)
+fit_parameters_two_param_calibration$interval <- factor(fit_parameters_two_param_calibration$interval, levels = intervals)
+
 ggplot(fit_parameters_one_param_calibration, aes(x = interval, y = gamma)) +
   geom_line(group = 1) +
   geom_point() +
   labs(title = "Gamma Parameter for One-Parameter Model",
        x = "Interval",
        y = "Gamma (Curvature)")
-
-# Visualization for gamma parameter in two-parameter model
-fit_parameters_one_param_calibration$interval <- factor(fit_parameters_one_param_calibration$interval, levels = intervals)
-fit_parameters_two_param_calibration$interval <- factor(fit_parameters_two_param_calibration$interval, levels = intervals)
 
 ggplot(fit_parameters_two_param_calibration, aes(x = interval, y = gamma)) +
   geom_line(group = 1) +
@@ -332,6 +332,9 @@ fit_parameters_two_param |>
 Viz 0.5
 
 ```{r}
+fit_parameters_one_param$interval <- factor(fit_parameters_one_param$interval, levels = intervals)
+fit_parameters_two_param$interval <- factor(fit_parameters_two_param$interval, levels = intervals)
+
 plot_one_param <- ggplot(fit_parameters_one_param, aes(x = interval, y = gamma)) +
   geom_point(size = 3) +
   geom_line(group = 1) +
